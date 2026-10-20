@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Salesforce Data Migrator</title>
+<style>
+  :root{color-scheme:light dark;--bg:#fff;--ink:#16202c;--muted:#5b6776;--brand:#0b5cab;--line:#dde3ea;--ok:#2e7d4f}
+  @media (prefers-color-scheme:dark){:root{--bg:#141a21;--ink:#e6ebf1;--muted:#97a3b1;--brand:#5aa2ff;--line:#2a333d;--ok:#5cc28a}}
+  body{margin:0;width:300px;background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{padding:16px}
+  h1{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+  h1 img{width:20px;height:20px}
+  p{margin:8px 0 14px;color:var(--muted)}
+  p.ok{color:var(--ok)}
+  button{width:100%;padding:9px 12px;border:0;border-radius:8px;background:var(--brand);color:#fff;font:600 13px system-ui,sans-serif;cursor:pointer}
+  button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  small{display:block;margin-top:10px;color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><img src="icons/icon32.png" alt="">Data Migrator</h1>
+  <p id="status">Checking this tab…</p>
+  <button id="open">Open Data Migrator</button>
+  <small>Uses your existing Salesforce login. No passwords or tokens are stored.</small>
+</div>
+<script type="module" src="popup.js"></script>
+</body>
+</html>

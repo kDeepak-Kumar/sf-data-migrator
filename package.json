@@ -1,0 +1,21 @@
+{
+  "name": "sf-data-migrator",
+  "version": "1.0.0",
+  "description": "Chrome extension: discover related Salesforce records and export or migrate them between orgs",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "vitest run",
+    "package": "npm run typecheck && npm test && npm run build && node -e \"const v=require('./package.json').version;require('child_process').execSync('cd dist && zip -qr ../sf-data-migrator-extension-v'+v+'.zip .',{stdio:'inherit'})\"",
+    "project-files": "node scripts/project-files.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/chrome": "^0.3.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "private": true
+}

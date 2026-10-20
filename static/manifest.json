@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Salesforce Data Migrator",
+  "short_name": "SF Data Migrator",
+  "version": "1.0.0",
+  "description": "Select Salesforce records, discover everything they reference, and export it or migrate it to another org with automatic Id remapping.",
+  "minimum_chrome_version": "110",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": { "default_popup": "popup.html", "default_title": "Salesforce Data Migrator", "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" } },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["cookies", "storage", "activeTab"],
+  "host_permissions": [
+    "https://*.salesforce.com/*",
+    "https://*.force.com/*",
+    "https://*.salesforce-setup.com/*",
+    "https://*.cloudforce.com/*",
+    "https://*.visualforce.com/*",
+    "https://*.salesforce.mil/*",
+    "https://*.force.mil/*",
+    "https://*.cloudforce.mil/*",
+    "https://*.salesforce-setup.mil/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.lightning.force.com/*", "https://*.my.salesforce.com/*", "https://*.my.salesforce-setup.com/*", "https://*.lightning.force.mil/*", "https://*.my.salesforce.mil/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" }
+}

@@ -1,0 +1,185 @@
+SALESFORCE DATA MIGRATOR — PROJECT CONTEXT
+Version 1.0.0 · last updated 2026-10-19 · owner: Bharath Chunchu
+Source of truth for purpose, design and rules. Update this file whenever a decision, invariant, UI step or backlog item changes.
+
+====================================================================
+1. MOTIVE
+====================================================================
+Moving related data between Salesforce orgs is still manual: export parents, export children, keep an Excel sheet of old→new Ids, VLOOKUP every lookup column, load in the right order, then chase failures. With many standard and custom objects it gets slow and error-prone.
+
+The extension removes that work. Pick records by Id or SOQL. The tool finds every record they reference, shows what it found, then either:
+  Mode A (Export): writes a migration-ready package (zip of CSVs plus load order and relationships), or
+  Mode B (Migrate): writes the records into a destination org in dependency order, replacing every lookup with the new destination Id.
+No spreadsheets, no manual Id mapping.
+
+Who it is for: Salesforce admins and developers, including consultants seeding sandboxes, moving test data between UAT/SIT orgs, or reproducing a production case in a sandbox.
+
+Manager-ready one-liner: "A browser add-on, like Salesforce Inspector, that copies a record and everything linked to it from one org to another in a few clicks, with no Excel Id mapping."
+
+====================================================================
+2. THEME AND PRODUCT PRINCIPLES
+====================================================================
+Look and feel
+- Lightweight, Inspector-style tool for technical users: compact, calm, readable, no marketing chrome.
+- One full extension tab with a left step rail (numbered steps; a check when done), a top bar showing Source → Destination org chips with Production (red) or Sandbox (green) badges and API usage.
+- Cards on a soft grey background. Brand blue #0b5cab (dark mode #4a95f0). Status colours: ok green, warn amber, err red. System UI font; monospace for API names and Ids.
+- Light and dark mode via CSS variables in static/styles.css (:root tokens). Responsive: below 820px the rail becomes a top strip.
+- Accessible: real buttons and labels, visible focus rings, aria-live toasts, reduced-motion respected.
+- Small launcher tab "⇄ Data Migrator" on the right edge of Salesforce pages (shadow DOM, can be turned off in Help & settings). Toolbar popup detects the current org.
+
+Principles
+- Safe by default: preview before write, typed confirmation for production, clear "incomplete" warnings at limits, no silent fallbacks.
+- Honest results: every record ends in a visible status with the Salesforce error, field and reason.
+- Reusable: rules saved as named profiles and shared as JSON; export packages can be migrated later by anyone without the source org.
+- Zero setup: install and use, no admin or connected app (see decision D1).
+- Describe-driven: works on any standard or custom object without code changes.
+
+====================================================================
+3. WHAT IS BUILT (v1.0.0)
+====================================================================
+Steps in the app (src/ui/app.ts):
+ 1 Connect orgs   Lists every logged-in org (from browser sessions) with name, environment, user, host. Choose source and destination.
+ 2 Select records Record Ids (15/18, mixed objects, any separators) or SOQL (must select Id; checked locally, then by Salesforce explain). Ids verified readable.
+ 3 Discovery rules Max depth (default 3, max 10), max records (default 2,000, max 50,000), follow lookups / master-detail / polymorphic, include-only objects, excluded objects (setup objects by default), excluded fields (*.CreatedById, *.LastModifiedById, *.MasterRecordId by default), opt-in child relationships with max per parent, field mode (migratable vs all readable). Named profiles; JSON export/import.
+ 4 Discover       BFS discovery; stats; records by object; browse table; expandable relationship tree; "References not included" with reason. Cancel supported.
+ 5 Export         Download package zip, or single object CSVs / dependencies.csv.
+ 6 Migrate        Per-object operation (Insert, Upsert on match field, Reuse match else insert, Reuse only, Skip), match field, "store source Id in" External ID field (auto-switches to upsert). Owner matching (username with suffix find/replace, email, federation Id, or running user). Record types by developer name or destination default. Unresolved optional lookup policy (skip record / blank field). Batch size (≤200). Copy audit fields opt-in. Prior Id-mapping CSV. Preview → approve → run (progress, cancel after current batch) → results, report zip, Id mapping CSV.
+ Import package   Load an export zip and migrate it without the source org.
+ Help & settings  Launcher toggle, clear settings, clear working data, how it works, limitations.
+
+====================================================================
+4. ARCHITECTURE
+====================================================================
+Layers (dependencies point downward only):
+  src/ui         app.ts (all views, state object, render loop), dom.ts (h() element builder, download, helpers)
+  src/platform   session.ts: reads the browser "sid" cookie per org, CookieSessionProvider, connect() → OrgConnection {info, client, describe}
+  src/core       pure TypeScript, no chrome.* / DOM; unit-tested in Node
+     client.ts     SalesforceClient: version pick, request() with host gate, retry, 401 refresh, usage header; query/explain/limits/describe; sObject Collections retrieve/create/update/upsert; queryIn() chunked IN queries
+     hosts.ts      allowlist of Salesforce API and UI domains (commercial, sandbox, .mil Gov Cloud, China); assertSalesforceApiOrigin()
+     describe.ts   DescribeService: global describe, key-prefix → object, cached object describe, FieldInfo, referenceKind()
+     ids.ts        15→18, checksum validation, parseIdList()
+     soql.ts       checkSoql() local guard (single SELECT, selects Id, no aggregates)
+     rules.ts      DiscoveryRules, defaults, limits, exclusion helpers, REFERENCE_DATA_OBJECTS (User, Group, RecordType)
+     discovery.ts  DiscoveryEngine.run() BFS; resolveSeeds()
+     graph.ts      RecordGraph (nodes, edges, field metadata, ref data, warnings); stronglyConnected() (Tarjan, iterative); planWaves()
+     refdata.ts    collectReferenceData(): reads Username/Email/FederationIdentifier, Group DeveloperName/Type, RecordType DeveloperName/SobjectType from source
+     migrate.ts    MigrationPlanner.plan() → MigrationPlan; MigrationExecutor.run() → MigrationResult; coerce(); summarize()
+     package.ts    export package build/read (zip), migration report zip, preview CSV, mapping CSV parse
+     csv.ts, zip.ts RFC 4180 CSV; dependency-free ZIP writer (stored) and reader (stored + deflate via DecompressionStream)
+     errors.ts     SfError kinds: auth | retryable | permanent | ambiguous | limit | cancelled; CancelToken; sanitize()
+  Entry points    src/background.ts (service worker: opens app tab on launcher message), src/content.ts (launcher button, IIFE), src/popup.ts
+  static/         manifest.json, app.html, popup.html, styles.css, icons
+
+Data flow: select → resolveSeeds → DiscoveryEngine.run → collectReferenceData → RecordGraph
+  → Mode A: buildExportPackage / zip
+  → Mode B: MigrationPlanner.plan (dest describe, matching, ref-data map, unresolved, waves) → preview → MigrationExecutor.run → report
+  → Import: readExportPackage(zip) → RecordGraph → Mode B
+All working data lives in the app tab's memory. Only settings are persisted (chrome.storage.local keys: rules, profiles, mig (without priorMappings), showLauncher).
+
+====================================================================
+5. KEY ALGORITHMS
+====================================================================
+Discovery (discovery.ts)
+- Visited registry keyed object:Id (one graph per source org), checked before queueing, so a shared parent is fetched once and cycles end.
+- Per depth level, Ids are grouped by object and fetched with sObject Collections retrieve (POST, chunks of 500), so URL length is never a problem.
+- Each populated reference field becomes an Edge with status: in-graph, reference-data (User/Group/RecordType, matched later), excluded, out-of-limit, missing, unknown-object. The target object comes from the Id key prefix, which handles polymorphic fields.
+- Child (reverse) relationships only via explicit childRules, using chunked IN queries (150 values) and per-parent caps.
+- At a depth or record limit: graph.truncated = true plus a warning; the UI and export say the dataset is incomplete.
+
+Planning (migrate.ts MigrationPlanner)
+- Per object: the destination describe decides which fields to send (present, createable, not calculated or auto-number, not an unsupported type, audit fields only if opted in), which reference fields to remap, and field-difference and picklist conflicts.
+- Matching order: prior mapping file (verified to exist) → match field (upsert key, or reuse when exactly one match; ambiguous = skip) → reference data (RecordType by SobjectType+DeveloperName, User by chosen key among active users, Group by Type+DeveloperName).
+- Unresolved references: an OwnerId/RecordTypeId that can't be mapped is omitted (destination default). A required lookup always skips the record. An optional one follows the policy. Skips propagate to dependents until stable.
+- Ordering: record-level dependencies → planWaves(): Tarjan SCC; for each cycle, defer ONE nillable, updateable, non-master-detail reference and repeat until acyclic; cycles with nothing deferrable → blocked. Longest-path layering gives waves.
+- Estimated API calls = matching queries + batches per wave/object/action + deferred update batches.
+
+Execution (MigrationExecutor)
+- Waves in order; within a wave, groups by action+object, batches ≤ batchSize via Collections create (allOrNone=false) or upsert on the match field.
+- Each record built at write time: non-reference fields coerced to destination types; references resolved from the in-run destination Id map; source Id written to sourceIdField if set.
+- Record-level UNABLE_TO_LOCK_ROW retried up to 3 times. HTTP 502/503 and concurrency REQUEST_LIMIT_EXCEEDED are retried (they are rejected before execution). A network failure after sending a create → status "unknown" and the run stops (never retried). Auth or daily limit errors stop the run.
+- After the waves: deferred updates via Collections update (idempotent, retry-safe). Cancel is checked between batches.
+
+Client (client.ts)
+- Picks the newest API version the org offers (min 52). Retries: 3, backoff 500ms·2^n (cap 8s) plus jitter. Only /services/ paths. Host must pass assertSalesforceApiOrigin. Reads the Sforce-Limit-Info header into usage.
+
+====================================================================
+6. DECISIONS (with reasons)
+====================================================================
+D1 Authentication reuses the browser's existing Salesforce session (sid cookie via chrome.cookies), like Salesforce Inspector. Reason: since September 2025 Salesforce blocks uninstalled connected apps for most users, so OAuth would need an admin to install an app in every org; the goal is install-and-use. The session is read on demand, used only for validated Salesforce API hosts, and never stored or logged. CRUD, FLS and sharing apply as the user. Alternative kept in backlog: optional OAuth PKCE mode.
+D2 Engine in src/core with no Chrome dependency, so it can be tested against FakeOrg and reused (e.g. a CLI or a Node script later).
+D3 REST sObject Collections for reads and writes (200 per write, partial success). Bulk API 2.0 deferred to the backlog for large volumes.
+D4 Users, Groups/Queues, RecordTypes are matched, never created. Setup objects are excluded by default.
+D5 Recommended idempotency: a text External ID field (e.g. Source_Id__c) in the destination holding the source Id, with upsert on it. Re-runs then update instead of duplicating.
+D6 Export package is self-describing (manifest with field metadata, dependencies, reference data), so it can be migrated later without the source org.
+D7 In-memory working data (hard cap 50,000 records). IndexedDB persistence and resume are in the backlog.
+D8 Plain DOM rendering with a tiny h() helper (no framework) to keep the bundle small and avoid build complexity. The whole view re-renders on state change; long-running progress updates a #live element directly.
+D9 Version is single-sourced in package.json; build.mjs writes it into dist/manifest.json.
+
+====================================================================
+7. INVARIANTS (tests or review must protect these)
+====================================================================
+I1 No source Id is ever written to a destination field (except the configured sourceIdField).
+I2 Each source record is fetched once per discovery run and inserted at most once per migration run.
+I3 Contact → Account does not pull the Account's other Contacts unless a child rule enables it.
+I4 Nothing is written before the preview is approved; production needs the typed org name.
+I5 A create whose outcome is unknown is never retried automatically.
+I6 Every request passes the host gate; no network calls except to Salesforce.
+I7 Record data is rendered only as text (h() / textContent); no innerHTML.
+I8 Limits never silently truncate: truncation is shown in the UI, the export manifest and the README.
+I9 src/core imports nothing from src/platform or src/ui and uses no chrome.* or DOM APIs (Blob/DecompressionStream in zip.ts excepted).
+
+====================================================================
+8. EXPORT PACKAGE FORMAT (format "sfdm-export", version 1)
+====================================================================
+manifest.json         format, version, createdAt, source OrgInfo, truncated, warnings, rules, objects[{name,label,file,count,columns,fields:FieldMeta[]}], totals
+objects/<Obj>.csv     Id + extracted fields (source Ids); "@type:<Field>" column per reference field naming the target object
+load-order.json       waves [{wave, objects:{Obj:[ids]}}], deferredUpdates [{object,id,field,references}], blocked
+dependencies.csv      fromObject, fromId, field, toObject, toId, kind, required, status
+unresolved.csv        same columns, edges not in-graph and not reference-data
+reference-data.csv    object, id, username, email, federationIdentifier, developerName, sobjectType, type, name
+README.txt            human summary
+Changing the format: bump PACKAGE_VERSION in package.ts, keep reading older versions.
+Migration report zip: summary.json, results.csv, errors.csv, id-mapping.csv (re-usable as prior mapping), deferred-updates.csv, unresolved.csv.
+
+====================================================================
+9. BUILD, TEST, RELEASE
+====================================================================
+npm install
+npm run typecheck            tsc strict, no emit
+npm test                     Vitest: tests/units.test.ts + tests/engine.test.ts (33 tests at v1.0.0, all passing)
+npm run build                esbuild → dist/ (app/popup/background as ESM, content as IIFE), static copied, version stamped
+npm run package              typecheck + test + build + sf-data-migrator-extension-v<version>.zip
+npm run project-files        regenerates project/02_CODE_MAP.txt and project/05_SOURCE_BUNDLE.txt
+UI check: node tests/harness/build-harness.mjs <dir>, open <dir>/harness.html (runs the real UI against two FakeOrgs), drive with Playwright.
+Install: chrome://extensions → Developer mode → Load unpacked → folder containing manifest.json.
+Permissions: cookies, storage, activeTab; host permissions for Salesforce domains only. CSP: script-src 'self'.
+Tooling: TypeScript 7, esbuild, Vitest 5, @types/chrome. No runtime dependencies.
+
+====================================================================
+10. KNOWN LIMITATIONS AND TECH DEBT
+====================================================================
+- Not yet validated against live orgs by the author (only the FakeOrg and the browser harness). First real runs: sandbox → sandbox.
+- Not migrated: ContentVersion/Attachment binaries, Notes, feeds, history, share rows, setup metadata. Person Accounts, PricebookEntry/standard price, converted Leads untested.
+- In-memory only: closing the tab loses the run (report download is the record). Cap 50,000 records.
+- Session-reuse auth fails if the org blocks API access for the profile or the session cannot be read; Gov Cloud policy may forbid extensions.
+- Destination automation (triggers, flows, validation and duplicate rules, emails) runs on insert.
+- Estimated API call count is approximate.
+- app.ts is a single ~1,200-line file. When a view grows, split views into src/ui/views/*.ts (keep the state object and render() in app.ts).
+- The UI harness is run manually, not in CI.
+
+====================================================================
+11. BACKLOG (priority order; move to CHANGELOG when shipped)
+====================================================================
+P1 Live-org validation pass: run scenarios 1–17 sandbox→sandbox, fix findings, record results.
+P1 Field mapping and transforms per object: rename/skip fields, default values, picklist value map, simple find/replace.
+P1 Data masking for sandbox seeding: scramble or anonymise selected fields (names, emails, phones, SSN-like) during export/migrate.
+P2 Saved "migration templates": rules + per-object settings + mapping in one shareable JSON.
+P2 Record-level include/exclude in the preview (untick specific records; dependents re-evaluated).
+P2 Rollback: delete records inserted by a run using its id-mapping.csv (reverse wave order, with confirmation).
+P2 IndexedDB persistence of graph and run state; resume after tab close.
+P2 Optional OAuth 2.0 PKCE mode (External Client App) for orgs where session reuse is blocked.
+P3 Bulk API 2.0 for large objects (query + ingest), with source-Id External ID for result mapping.
+P3 Files: ContentVersion/ContentDocumentLink and Attachment migration.
+P3 Composite Graph evaluation for small all-or-nothing clusters.
+P3 Streaming export to disk (File System Access API) for very large exports.
+P3 Chrome Web Store listing (privacy policy, screenshots, minified build).

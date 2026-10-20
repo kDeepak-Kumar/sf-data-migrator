@@ -1,0 +1,30 @@
+SALESFORCE DATA MIGRATOR — CHANGELOG
+Newest first. One entry per released version. Keep each entry short; details live in the code and 01_PROJECT_CONTEXT.txt.
+
+Entry format
+------------
+vX.Y.Z — YYYY-MM-DD
+Added:    user-visible new capability (one line each)
+Changed:  behaviour change
+Fixed:    bug, with the symptom in plain words
+Files:    main files touched
+Tests:    tests added/changed · total passing
+Notes:    live-org validation status, follow-ups, backlog items closed
+
+Versioning: patch = fix, minor = feature, major = export-package format or workflow break.
+Set the version in package.json only; the build copies it into the manifest.
+
+====================================================================
+v1.0.0 — 2026-10-11 (repackaged with project files 2026-10-19)
+Added:    MV3 extension with popup, on-page launcher and full app tab (Connect, Select, Rules, Discover, Export, Migrate, Import package, Help & settings).
+Added:    Session-reuse connection to every logged-in org; production/sandbox detection; API usage display.
+Added:    Selection by Ids (15/18, mixed objects) or SOQL with local guard and server explain.
+Added:    Describe-driven BFS discovery: lookups, master-detail, polymorphic, custom objects, depth and record limits, include/exclude objects and fields, opt-in child relationships with per-parent cap, field mode, named rule profiles with JSON import/export.
+Added:    Record graph with statuses, browse table, relationship tree, "references not included" report, truncation warnings.
+Added:    Export package zip (per-object CSVs, manifest, load order, dependencies, unresolved, reference data, README) and single CSV downloads.
+Added:    Direct migration: per-object insert/upsert/reuse/skip, match fields, source-Id field, owner/record-type/queue matching, username suffix transform, unresolved-lookup policy, audit-field opt-in, prior Id mapping, preview (counts, waves, unresolved, field differences, picklist conflicts, API estimate), approval and production confirmation, progress and cancel, deferred updates for cycles, results with per-record errors, report zip and Id mapping CSV.
+Added:    Import an export package and migrate it without the source org.
+Added:    Developer tooling: npm scripts (typecheck, test, build, package, project-files), FakeOrg, UI browser harness, scripts/project-files.mjs; version single-sourced from package.json.
+Files:    all (initial)
+Tests:    33 Vitest tests (units + engine scenarios 1–17) · 33 passing. UI driven end to end in headless Chromium against two FakeOrgs; packaged zip loads in Chromium.
+Notes:    Not yet validated against live orgs. Next: backlog P1 live-org validation pass.

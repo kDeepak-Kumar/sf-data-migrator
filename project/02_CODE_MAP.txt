@@ -1,0 +1,597 @@
+CODE MAP — exported API of every source file
+Project: Salesforce Data Migrator · version 1.0.0 · generated 2026-10-19 by scripts/project-files.mjs
+Do not edit by hand: run "npm run project-files" after code changes and re-upload.
+
+Read this before asking for source. Each section: purpose comment, then exported types (full) and function/class signatures.
+Line counts help decide whether to attach a whole file or only part of it.
+
+==============================================================================
+src/background.ts  (9 lines)
+==============================================================================
+Service worker: opens the app tab when the on-page launcher is clicked. Holds no data or sessions.
+
+==============================================================================
+src/content.ts  (17 lines)
+==============================================================================
+Adds a small launcher button to Salesforce pages. Reads nothing from the page.
+
+==============================================================================
+src/core/client.ts  (234 lines)
+==============================================================================
+Salesforce REST client: host-gated, retrying, limit-aware. No Chrome APIs.
+interface Session {
+  instanceUrl: string;
+  accessToken: string;
+}
+interface SessionProvider {
+  getSession(): Promise<Session>;
+  /** Re-reads or refreshes the session after a 401. Returns true when a new session is available. */
+  refresh?(): Promise<boolean>;
+}
+interface ClientOptions {
+  fetchImpl?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  maxRetries?: number;
+  minApiVersion?: number;
+}
+interface ApiUsage {
+  used: number;
+  max: number;
+}
+interface SaveResult {
+  id?: string;
+  success: boolean;
+  created?: boolean;
+  errors: { statusCode: string; message: string; fields?: string[] }[];
+}
+class SalesforceClient {
+  apiVersion = '62.0';
+  usage: ApiUsage | null = null;
+  requestCount = 0;
+  constructor(private provider: SessionProvider, opts: ClientOptions = {})
+  async init(): Promise<void>
+  get base(): string
+  async request<T>(method: string, path: string, body?: unknown, retry: RetryMode = method === 'GET' ? 'safe' : 'never', cancel?: CancelToken): Promise<T>
+  async *queryPages<T = Record<string, unknown>>(soql: string, cancel?: CancelToken): AsyncGenerator<T[]>
+  async query<T = Record<string, unknown>>(soql: string, max = Infinity, cancel?: CancelToken): Promise<T[]>
+  async explain(soql: string): Promise<void>
+  async limits(): Promise<Record<string, { Max: number; Remaining: number }>>
+  describeGlobal(): Promise<{ sobjects: { name: string; keyPrefix: string | null; label: string; queryable: boolean; createable: boolean }[] }>
+  describe(object: string): Promise<unknown>
+  retrieve(object: string, ids: string[], fields: string[], cancel?: CancelToken): Promise<(Record<string, unknown> | null)[]>
+  create(records: Record<string, unknown>[], cancel?: CancelToken): Promise<SaveResult[]>
+  update(records: Record<string, unknown>[], cancel?: CancelToken): Promise<SaveResult[]>
+  upsert(object: string, externalIdField: string, records: Record<string, unknown>[], cancel?: CancelToken): Promise<SaveResult[]>
+}
+function soqlString(value: string): string
+function chunk<T>(arr: T[], size: number): T[][]
+async function queryIn<T = Record<string, unknown>>( client: SalesforceClient, fields: string[], object: string, field: string, values: string[], extraWhere = '', cancel?: CancelToken, ): Promise<T[]>
+
+==============================================================================
+src/core/csv.ts  (60 lines)
+==============================================================================
+RFC 4180 CSV writing and parsing.
+function csvCell(v: unknown): string
+function csvRow(values: unknown[]): string
+function toCsv(header: string[], rows: unknown[][], bom = true): string
+function parseCsv(text: string): string[][]
+function parseCsvObjects(text: string): Record<string, string>[]
+
+==============================================================================
+src/core/describe.ts  (159 lines)
+==============================================================================
+Describe metadata, cached per org, with a key-prefix index for resolving any Id to its object.
+interface FieldInfo {
+  name: string;
+  label: string;
+  type: string;
+  referenceTo: string[];
+  relationshipName: string | null;
+  createable: boolean;
+  updateable: boolean;
+  nillable: boolean;
+  calculated: boolean;
+  autoNumber: boolean;
+  externalId: boolean;
+  idLookup: boolean;
+  unique: boolean;
+  cascadeDelete: boolean;
+  relationshipOrder: number | null;
+  defaultedOnCreate: boolean;
+  restrictedPicklist: boolean;
+  picklistValues: { value: string; active: boolean }[];
+}
+interface ChildRelationship {
+  childSObject: string;
+  field: string;
+  relationshipName: string | null;
+  cascadeDelete: boolean;
+}
+interface ObjectInfo {
+  name: string;
+  label: string;
+  keyPrefix: string | null;
+  createable: boolean;
+  updateable: boolean;
+  queryable: boolean;
+  fields: FieldInfo[];
+  childRelationships: ChildRelationship[];
+}
+interface GlobalObject {
+  name: string;
+  label: string;
+  keyPrefix: string | null;
+  queryable: boolean;
+  createable: boolean;
+}
+type ReferenceKind = 'lookup' | 'master-detail' | 'polymorphic';
+function referenceKind(f: FieldInfo): ReferenceKind
+const UNSUPPORTED_TYPES = new Set(['address', 'location', 'base64', 'complexvalue', 'anyType']);
+const AUDIT_FIELDS = new Set(['CreatedDate', 'CreatedById', 'LastModifiedDate', 'LastModifiedById', 'SystemModstamp', 'LastActivityDate', 'LastViewedDate', 'LastReferencedDate']);
+class DescribeService {
+  constructor(private client: SalesforceClient) {}
+  async global(): Promise<GlobalObject[]>
+  async objectForId(id: string): Promise<string | null>
+  async objectForPrefix(prefix: string): Promise<string | null>
+  async resolveName(name: string): Promise<string | null>
+  async exists(name: string): Promise<boolean>
+  describe(name: string): Promise<ObjectInfo>
+}
+function fieldMap(info: ObjectInfo): Map<string, FieldInfo>
+
+==============================================================================
+src/core/discovery.ts  (241 lines)
+==============================================================================
+Relationship discovery: breadth-first walk over populated references, one depth level at a time.
+interface DiscoveryProgress {
+  phase: string;
+  depth: number;
+  records: number;
+  message?: string;
+}
+interface DiscoveryInput {
+  /** Seed records grouped by object API name, Ids already normalised to 18 characters. */
+  seeds: Map<string, string[]>;
+  rules: DiscoveryRules;
+  onProgress?: (p: DiscoveryProgress) => void;
+  cancel?: CancelToken;
+}
+class DiscoveryEngine {
+  constructor(private client: SalesforceClient, private describe: DescribeService) {}
+  fieldsToFetch(info: ObjectInfo, rules: DiscoveryRules): string[]
+  async run(input: DiscoveryInput): Promise<RecordGraph>
+}
+async function resolveSeeds( client: SalesforceClient, describe: DescribeService, input: { ids?: string[]; soql?: string; maxRecords: number }, ): Promise<{ seeds: Map<string, string[]>; warnings: string[] }>
+
+==============================================================================
+src/core/errors.ts  (39 lines)
+==============================================================================
+type ErrorKind = 'auth' | 'retryable' | 'permanent' | 'ambiguous' | 'limit' | 'cancelled';
+class SfError extends Error {
+  constructor(
+  message: string,
+  public kind: ErrorKind,
+  public status = 0,
+  public errorCode = '',
+  public fields: string[] = [],
+}
+class CancelledError extends SfError {
+  constructor()
+}
+interface CancelToken {
+  cancelled: boolean;
+}
+function checkCancel(token?: CancelToken): void
+const RETRYABLE_RECORD_CODES = new Set(['UNABLE_TO_LOCK_ROW', 'SERVER_UNAVAILABLE']);
+function sanitize(message: string): string
+
+==============================================================================
+src/core/graph.ts  (282 lines)
+==============================================================================
+Record graph: nodes are records, edges are populated reference fields (child -> referenced record).
+type EdgeStatus =
+  | 'in-graph' // target record was extracted
+  | 'reference-data' // User, Group, RecordType: matched in the destination, never copied
+  | 'excluded' // target object or field excluded by rules
+  | 'out-of-limit' // depth or record limit reached before the target was fetched
+  | 'missing' // target not found or not readable in the source
+  | 'unknown-object'; // Id prefix not recognised in the source org
+interface RecordNode {
+  key: string; // `${object}:${id}`
+  object: string;
+  id: string;
+  depth: number;
+  seed: boolean;
+  fields: Record<string, unknown>;
+}
+interface Edge {
+  from: string; // node key
+  field: string;
+  toObject: string | null;
+  toId: string;
+  kind: ReferenceKind;
+  required: boolean;
+  status: EdgeStatus;
+}
+interface FieldMeta {
+  name: string;
+  label: string;
+  type: string;
+  referenceTo: string[];
+  kind?: ReferenceKind;
+  nillable: boolean;
+  createable: boolean;
+  updateable: boolean;
+}
+interface ReferenceDataRecord {
+  object: string; // User | Group | RecordType
+  id: string;
+  username?: string;
+  email?: string;
+  federationIdentifier?: string;
+  developerName?: string;
+  sobjectType?: string;
+  type?: string;
+  name?: string;
+}
+interface OrgInfo {
+  orgId: string;
+  name: string;
+  instanceUrl: string;
+  isSandbox: boolean;
+  orgType: string;
+  username?: string;
+  userId?: string;
+}
+const nodeKey = (object: string, id: string) => `${object}:${id}`;
+class RecordGraph {
+  nodes = new Map<string, RecordNode>();
+  edges: Edge[] = [];
+  objectFields = new Map<string, FieldMeta[]>();
+  objectLabels = new Map<string, string>();
+  refData = new Map<string, ReferenceDataRecord>();
+  truncated = false;
+  warnings: string[] = [];
+  maxDepthReached = 0;
+  source: OrgInfo | null = null;
+  createdAt = new Date().toISOString();
+  addNode(n: RecordNode)
+  has(object: string, id: string)
+  edgesFrom(key: string): Edge[]
+  targetKey(e: Edge): string | null
+  objects(): string[]
+  countsByObject(): Map<string, number>
+  nodesOf(object: string): RecordNode[]
+  issues(): Edge[]
+  finalize()
+}
+interface Dep {
+  from: string;
+  to: string;
+  field: string;
+  deferrable: boolean;
+}
+interface WavePlan {
+  waves: string[][];
+  deferred: Dep[];
+  blocked: Map<string, string>; // key -> reason
+}
+function stronglyConnected(nodes: string[], adj: Map<string, string[]>): string[][]
+function planWaves(nodes: string[], deps: Dep[]): WavePlan
+
+==============================================================================
+src/core/hosts.ts  (60 lines)
+==============================================================================
+Host validation: the only gate through which any Salesforce URL passes.
+const API_DOMAIN_SUFFIXES = [
+const UI_DOMAIN_SUFFIXES = [
+function isSalesforceApiHost(input: string): boolean
+function isSalesforceUiHost(input: string): boolean
+function assertSalesforceApiOrigin(url: string): string
+
+==============================================================================
+src/core/ids.ts  (59 lines)
+==============================================================================
+Salesforce record Id helpers: 15/18 conversion, checksum validation, parsing.
+function to18(id: string): string
+function isValidId(id: string): boolean
+function normalizeId(id: string): string
+function keyPrefix(id: string): string
+function parseIdList(text: string): { ids: string[]; invalid: string[] }
+function looksLikeId(value: unknown): value is string
+
+==============================================================================
+src/core/migrate.ts  (705 lines)
+==============================================================================
+Migration planning and execution: matching, reference remapping, dependency-ordered batched writes.
+type Operation = 'insert' | 'upsert' | 'reuse-or-insert' | 'reuse-only' | 'skip';
+interface ObjectSettings {
+  operation: Operation;
+  /** Destination field used to find existing records (External ID or unique field). Required for upsert and reuse. */
+  matchField?: string;
+  /** Destination text External ID field that receives the source record Id (enables safe re-runs). */
+  sourceIdField?: string;
+}
+interface MigrationSettings {
+  objects: Record<string, ObjectSettings>;
+  ownerStrategy: 'match-username' | 'match-email' | 'match-federation' | 'running-user';
+  usernameTransform?: { find: string; replace: string };
+  recordTypeStrategy: 'match-developer-name' | 'omit';
+  unresolvedPolicy: 'skip-record' | 'blank-field';
+  includeAuditFields: boolean;
+  batchSize: number;
+  priorMappings: { sourceObject: string; sourceId: string; destId: string }[];
+}
+function defaultMigrationSettings(): MigrationSettings
+type PlannedAction = 'insert' | 'upsert' | 'reuse' | 'skip' | 'blocked';
+interface NodePlan {
+  key: string;
+  object: string;
+  sourceId: string;
+  action: PlannedAction;
+  destId?: string;
+  matchedBy?: string;
+  reason?: string;
+  upsertValue?: string;
+}
+interface UnresolvedRef {
+  key: string;
+  object: string;
+  sourceId: string;
+  field: string;
+  targetObject: string | null;
+  targetId: string;
+  reason: string;
+  effect: 'record skipped' | 'field left blank' | 'field omitted (destination default)';
+}
+interface FieldIssue {
+  object: string;
+  field: string;
+  issue: string;
+}
+interface MigrationPlan {
+  source: OrgInfo | null;
+  destination: OrgInfo;
+  nodes: Map<string, NodePlan>;
+  sendFields: Map<string, string[]>; // non-reference fields to write per object
+  refFields: Map<string, Map<string, FieldInfo>>; // reference fields writable in the destination per object
+  destTypes: Map<string, Map<string, string>>;
+  refDataMap: Map<string, string>; // `${object}:${sourceId}` -> destination Id
+  waves: string[][];
+  deferred: Dep[];
+  unresolved: UnresolvedRef[];
+  omittedRefs: Set<string>; // `${key}|${field}` references deliberately left out
+  fieldIssues: FieldIssue[];
+  conflicts: string[];
+  warnings: string[];
+  counts: Map<string, Record<PlannedAction, number>>;
+  estimatedCalls: number;
+  settings: MigrationSettings;
+}
+class MigrationPlanner {
+  constructor(private graph: RecordGraph, private dest: SalesforceClient, private destDescribe: DescribeService, private destination: OrgInfo) {}
+  async plan(settings: MigrationSettings, cancel?: CancelToken): Promise<MigrationPlan>
+}
+type RecordStatus = 'inserted' | 'updated' | 'reused' | 'failed' | 'skipped' | 'blocked' | 'unknown' | 'cancelled' | 'not-run';
+interface RecordResult {
+  key: string;
+  object: string;
+  sourceId: string;
+  destId?: string;
+  action: PlannedAction;
+  status: RecordStatus;
+  method?: string;
+  field?: string;
+  message?: string;
+}
+interface DeferredResult {
+  key: string;
+  object: string;
+  sourceId: string;
+  field: string;
+  status: 'updated' | 'failed' | 'skipped';
+  message?: string;
+}
+interface MigrationProgress {
+  done: number;
+  total: number;
+  wave: number;
+  waves: number;
+  message: string;
+}
+interface MigrationResult {
+  startedAt: string;
+  finishedAt: string;
+  source: OrgInfo | null;
+  destination: OrgInfo;
+  records: RecordResult[];
+  deferred: DeferredResult[];
+  stoppedReason?: string;
+  apiCalls: number;
+  apiErrors: string[];
+}
+class MigrationExecutor {
+  constructor(private graph: RecordGraph, private plan: MigrationPlan, private dest: SalesforceClient, private sleep: (ms: number) => Promise<void>
+  async run(onProgress?: (p: MigrationProgress) => void, cancel?: CancelToken): Promise<MigrationResult>
+}
+function coerce(v: unknown, type?: string): unknown
+function summarize(result: MigrationResult)
+
+==============================================================================
+src/core/package.ts  (225 lines)
+==============================================================================
+Export package (zip of CSVs + metadata) and re-import into a RecordGraph, plus migration reports.
+const PACKAGE_FORMAT = 'sfdm-export';
+const PACKAGE_VERSION = 1;
+interface PackageManifest {
+  format: string;
+  version: number;
+  createdAt: string;
+  tool: string;
+  source: RecordGraph['source'];
+  truncated: boolean;
+  warnings: string[];
+  rules?: unknown;
+  objects: { name: string; label: string; file: string; count: number; columns: string[]; fields: FieldMeta[] }[];
+  totals: { records: number; dependencies: number; unresolved: number };
+}
+function objectCsv(graph: RecordGraph, object: string): string
+function dependenciesCsv(edges: Edge[], graph: RecordGraph): string
+function buildExportPackage(graph: RecordGraph, rules?: unknown): { entries: ZipEntry[]; manifest: PackageManifest }
+function zipExportPackage(graph: RecordGraph, rules?: unknown): Uint8Array
+async function readExportPackage(bytes: Uint8Array): Promise<RecordGraph>
+function previewCsv(plan: MigrationPlan): string
+function buildMigrationReport(result: MigrationResult, plan: MigrationPlan): Uint8Array
+function parseMappingCsv(text: string): { sourceObject: string; sourceId: string; destId: string }[]
+
+==============================================================================
+src/core/refdata.ts  (44 lines)
+==============================================================================
+Reference data (User, Group, RecordType): captured from the source so it can be matched in the destination.
+async function collectReferenceData(client: SalesforceClient, graph: RecordGraph, cancel?: CancelToken): Promise<void>
+
+==============================================================================
+src/core/rules.ts  (79 lines)
+==============================================================================
+User-configurable traversal and extraction rules.
+interface ChildRule {
+  parentObject: string;
+  childObject: string;
+  field: string; // lookup field on the child that points at the parent
+  relationshipName?: string | null;
+  maxPerParent?: number;
+}
+interface DiscoveryRules {
+  maxDepth: number;
+  maxRecords: number;
+  followLookups: boolean;
+  followMasterDetail: boolean;
+  followPolymorphic: boolean;
+  /** Empty = all objects permitted. */
+  includeObjects: string[];
+  excludeObjects: string[];
+  /** Entries as `Object.Field` or `*.Field`. */
+  excludeFields: string[];
+  childRules: ChildRule[];
+  /** 'writable' fetches createable/updateable fields plus Name; 'all' fetches every readable field. */
+  fieldMode: 'writable' | 'all';
+}
+const REFERENCE_DATA_OBJECTS = ['User', 'Group', 'RecordType'];
+const DEFAULT_EXCLUDED_OBJECTS = [
+function defaultRules(): DiscoveryRules
+const HARD_LIMITS = { maxDepth: 10, maxRecords: 50000 };
+function validateRules(r: DiscoveryRules): string[]
+function isObjectExcluded(r: DiscoveryRules, object: string): boolean
+function isFieldExcluded(r: DiscoveryRules, object: string, field: string): boolean
+function isReferenceData(object: string): boolean
+
+==============================================================================
+src/core/soql.ts  (42 lines)
+==============================================================================
+Local SOQL guard. Full syntax checking is done server-side with the explain endpoint.
+interface SoqlCheck {
+  ok: boolean;
+  object?: string;
+  error?: string;
+}
+function checkSoql(soql: string): SoqlCheck
+function normalizeSoql(soql: string): string
+
+==============================================================================
+src/core/zip.ts  (130 lines)
+==============================================================================
+Minimal ZIP writer (stored entries) and reader (stored and deflate), with no dependencies.
+function crc32(data: Uint8Array): number
+interface ZipEntry {
+  name: string;
+  data: Uint8Array | string;
+}
+function createZip(entries: ZipEntry[], now = new Date()): Uint8Array
+async function readZip(buf: Uint8Array): Promise<Map<string, Uint8Array>>
+
+==============================================================================
+src/platform/session.ts  (93 lines)
+==============================================================================
+Chrome adapter: reuses the browser's existing Salesforce session (sid cookie), like other inspector tools.
+The session never leaves this extension; it is read on demand and never written to storage or logs.
+interface DetectedSession {
+  orgId: string;
+  apiHost: string;
+}
+async function listSessions(): Promise<DetectedSession[]>
+async function sessionForUiHost(uiHost: string): Promise<DetectedSession | null>
+class CookieSessionProvider implements SessionProvider {
+  constructor(public apiHost: string, public orgId: string) {}
+  async getSession(): Promise<Session>
+  async refresh(): Promise<boolean>
+}
+interface OrgConnection {
+  info: OrgInfo;
+  client: SalesforceClient;
+  describe: DescribeService;
+}
+async function connect(s: DetectedSession): Promise<OrgConnection>
+
+==============================================================================
+src/popup.ts  (27 lines)
+==============================================================================
+
+
+==============================================================================
+src/ui/app.ts  (1192 lines)
+==============================================================================
+Main extension page: Connect → Select → Rules → Discover → Export / Migrate, plus Import package.
+Top-level functions: loadSettings(), saveSettings(), toast(msg: string, kind: 'ok' | 'err' | 'info' = 'info'), errMsg(e: unknown), stepDone(s: Step), go(step: Step), orgChip(label: string, c: OrgConnection | null), envBadge(c: OrgConnection), render(), page(title: string, lead: string, ...body: unknown[]), card(title: string | null, ...body: unknown[]), banner(kind: 'warn' | 'err' | 'info' | 'ok', ...text: unknown[]), stat(label: string, value: string | number, kind = ''), need(cond: boolean, msg: string, step: Step, label: string), scanSessions(), viewConnect(), setSource(c: OrgConnection), setDest(c: OrgConnection), resetGraph(), validateSelection(), viewSelect(), listInput(label: string, value: string[], set: (v: string[]), loadChildOptions(), viewRules(), runDiscovery(), updateProgress(), nodeLabel(g: RecordGraph, key: string), treeNode(g: RecordGraph, key: string, seen: Set<string>, depth: number), viewDiscover(), recordTable(g: RecordGraph, object: string), cellText(v: unknown), issueTable(g: RecordGraph, issues: Edge[]), viewExport(), viewImport(), loadDestMeta(), invalidatePlan(), buildPreview(), runMigration(), updateMigProgress(), objectSettingsTable(), viewMigrate(), previewView(plan: MigrationPlan, prod: boolean), resultView(r: MigrationResult, plan: MigrationPlan), viewHelp(), boot()
+
+==============================================================================
+src/ui/dom.ts  (69 lines)
+==============================================================================
+Tiny DOM helpers. All text goes through textContent, so record data can never inject markup.
+function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: Attrs | null, ...children: Child[]): HTMLElementTagNameMap[K]
+function clear(el: Element)
+function download(name: string, data: BlobPart, type = 'application/octet-stream')
+function fmt(n: number): string
+function stamp(): string
+function readFile(file: File): Promise<Uint8Array>
+function select(value: string, options: [string, string][], onchange: (v: string) => void, attrs: Attrs = {})
+
+==============================================================================
+TESTS
+==============================================================================
+tests/engine.test.ts (349 lines)
+  - 1. extracts a Contact with its Account chain but not sibling Contacts
+  - 2. shared parent is extracted once
+  - 3/4. follows multiple lookups and custom object relationships
+  - 5. handles a self-referencing record
+  - 6. detects circular dependencies and defers a nillable reference
+  - 7. stops at the depth limit and reports truncation
+  - 7b. stops at the record limit
+  - reverse traversal only when configured, with per-parent limit
+  - 8. reports references to excluded and missing targets
+  - resolves seeds from SOQL and validates via explain
+  - paginates query results
+  - 9/16. migrates a graph and preserves relationships with new destination Ids
+  - 6. migrates a circular dependency with a deferred update
+  - 5. migrates a self-referencing record via deferred update
+  - 10/15. reuses existing destination records and re-runs without duplicates
+  - 11/14. reports validation-rule failures with partial success and skips dependents
+  - blank-field policy writes the child without the failed optional parent
+  - master-detail child is skipped when its required parent is excluded
+  - flags restricted picklist conflicts and missing destination objects in the preview
+  - 13. retries a transient 503 and surfaces expired sessions
+  - 12. refreshes the session once on 401
+  - does not blindly retry an insert after a network failure
+  - cancels between batches
+  - 17. exports per-object CSVs and re-imports to migrate without the source org
+tests/fakeOrg.ts (348 lines) — FakeOrg: in-memory Salesforce org serving the REST endpoints the client uses (versions, describe, query+explain+paging, collections retrieve/create/update/upsert), with required-field, cross-reference, restricted-picklist and custom validation checks; standardSchema() = User, Group, RecordType, Region__c, Customer__c, Account, Contact, Invoice__c (master-detail).
+tests/harness/harness.ts (59 lines) — Browser harness: runs the real app UI against two FakeOrgs with a stubbed chrome.* API (build with tests/harness/build-harness.mjs <outDir>, open harness.html, drive with Playwright).
+tests/units.test.ts (89 lines)
+  - converts 15 to 18 and validates checksums
+  - allows Salesforce API hosts only
+  - accepts Id queries and rejects others
+  - escapes SOQL literals
+  - escapes and round-trips commas, quotes, newlines and unicode
+  - round-trips stored entries
+  - blocks cycles made only of required references
+  - orders parents before children
+  - redacts session ids

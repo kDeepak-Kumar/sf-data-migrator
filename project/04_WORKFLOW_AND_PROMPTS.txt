@@ -1,0 +1,82 @@
+SALESFORCE DATA MIGRATOR — WORKFLOW AND PROMPTS
+How to keep the Claude Project in sync with the code and spend as few tokens as possible.
+
+====================================================================
+A. ONE-TIME SETUP OF THE CLAUDE PROJECT
+====================================================================
+1. Create a Project named "Salesforce Data Migrator".
+2. Paste 00_PROJECT_INSTRUCTIONS.txt into the Project's Instructions box.
+3. Upload these to Project knowledge:
+     01_PROJECT_CONTEXT.txt   (~5k tokens)  purpose, theme, architecture, rules, backlog
+     02_CODE_MAP.txt          (~6.5k)       generated API map of every file and the test list
+     03_CHANGELOG.txt         (~1k)         what shipped
+     04_WORKFLOW_AND_PROMPTS.txt (~1.5k)    this file
+   Total ~14k tokens. That is enough to plan almost any change.
+4. Optional: 05_SOURCE_BUNDLE.txt (~60k) has the complete source. Upload it only if you want Claude to read any file without you attaching it. Leaving it out saves tokens; attach just the 1–3 files a change needs instead.
+5. Keep the source folder (sf-data-migrator-source zip, unzipped) on your machine, and run "npm install" once.
+
+====================================================================
+B. SYNC LOOP AFTER EVERY CHANGE
+====================================================================
+1. Apply the edits Claude gives you (or take the rebuilt zip if Claude edited the files directly).
+2. In the source folder:   npm run typecheck && npm test
+3. Bump "version" in package.json if anything user-visible changed.
+4. npm run package          → sf-data-migrator-extension-v<version>.zip (reload it in chrome://extensions)
+5. npm run project-files    → regenerates project/02_CODE_MAP.txt and project/05_SOURCE_BUNDLE.txt
+6. Paste the changelog block Claude gave you at the top of 03_CHANGELOG.txt. Apply any lines it gave for 01_PROJECT_CONTEXT.txt.
+7. In the Project: delete the old 02 (and 03, 01 if changed, 05 if used) and upload the new ones.
+Rule of thumb: if the Project files and the code disagree, the code wins. Re-run step 5.
+
+====================================================================
+C. PROMPT TEMPLATES (copy, fill in, send in a new chat inside the Project)
+====================================================================
+New enhancement
+---------------
+Enhancement: <what you want, in one or two sentences>
+Why / scenario: <the real migration case, e.g. "ImpactCap benefit applications with 3 levels of custom children">
+Acceptance: <what must be true when done>
+Constraints: <anything to avoid; e.g. "no new permissions">
+Plan first, list the files you need, then wait for "go".
+
+Bug report
+----------
+Bug: <symptom>
+Steps: <org type, selection used, rules, mode>
+Expected vs actual: <...>
+Evidence: <error text from Results / errors.csv, console message, screenshot>
+Attached: <files you attached, if any>
+Find the cause, give the minimal fix plus a regression test.
+
+Continue a backlog item
+-----------------------
+Pick up backlog item "<name>" from 01_PROJECT_CONTEXT.txt section 11. Propose the design in under 15 lines (files, functions, tests, UI change), then wait for "go".
+
+Live-org validation
+-------------------
+I ran scenario <n> from the test list against <sandbox A> → <sandbox B>. Result: <pass/fail + details>. Update the plan and tell me what to try next.
+
+Explain for a manager or client
+-------------------------------
+Write a short plain-prose paragraph explaining <feature/change> to a non-technical manager.
+
+====================================================================
+D. TOKEN-SAVING HABITS
+====================================================================
+- Start a new chat per task inside the Project. Long chats re-read all earlier messages on every turn.
+- Attach only the files Claude asks for. 02_CODE_MAP.txt tells it what exists, so it shouldn't need more.
+- Ask for find/replace edits, not whole files (the instructions already require this).
+- Say "go" or "adjust: …" instead of restating the plan.
+- After a big feature lands, run "npm run project-files" before the next chat so Claude never plans from a stale map.
+- For UI-only tweaks, attach src/ui/app.ts (and static/styles.css for visual changes). For engine changes, attach the src/core file(s) plus tests/engine.test.ts.
+
+====================================================================
+E. FILE CHEAT SHEET (which file to attach for which change)
+====================================================================
+New discovery rule or traversal behaviour   src/core/rules.ts, src/core/discovery.ts, tests/engine.test.ts, src/ui/app.ts (viewRules)
+Matching, field selection, ordering         src/core/migrate.ts (MigrationPlanner), src/core/graph.ts (planWaves), tests/engine.test.ts
+Write behaviour, retries, errors            src/core/migrate.ts (MigrationExecutor), src/core/client.ts, src/core/errors.ts
+Export or report contents                   src/core/package.ts, src/core/csv.ts, tests/engine.test.ts (export test)
+Connecting to orgs                          src/platform/session.ts, src/core/hosts.ts, static/manifest.json
+Screens, wording, layout                    src/ui/app.ts, static/styles.css
+Launcher or popup                           src/content.ts, src/popup.ts, static/popup.html, src/background.ts
+Test fake org (new Salesforce behaviour)    tests/fakeOrg.ts
